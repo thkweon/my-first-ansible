@@ -112,6 +112,7 @@
         state: absent
       delegate_to: localhost
       run_once: true
+      become: false      # [추가] 세마포어 내부에서는 sudo 쓰지 마!
       loop:
         - "/tmp/dynamic_ssh_key"
         - "/tmp/dynamic_ssh_key.pub"
