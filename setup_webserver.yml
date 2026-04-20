@@ -1,14 +1,22 @@
 ---
 # ==========================================
-# 1. Vault에서 동적 SSH 키 발급받기
+# 1. Vault SSH CA를 통해 1회용 인증서 서명 받기
 # ==========================================
-- name: Get Dynamic SSH Key from Vault
+- name: Get Dynamic SSH Cert from Vault
   hosts: localhost
   gather_facts: false
   tasks:
-    - name: Login to Vault
+    # 1. Semaphore 내부에 1회용 임시 SSH 키쌍 생성
+    - name: Generate temporary SSH keypair
+      community.crypto.openssh_keypair:
+        path: /tmp/dynamic_ssh_key
+        type: ed25519
+      register: temp_keypair
+
+    # 2. Vault AppRole 로그인 (경로를 approle-ssh 로 수정!)
+    - name: Login to Vault AppRole
       uri:
-        url: "{{ lookup('env', 'VAULT_ADDR') }}/v1/auth/approle/login"
+        url: "{{ lookup('env', 'VAULT_ADDR') }}/v1/auth/approle-ssh/login"
         method: POST
         body_format: json
         body:
@@ -16,26 +24,30 @@
           secret_id: "{{ lookup('env', 'VAULT_SECRET_ID') }}"
       register: vault_login
 
-    - name: Fetch Dynamic SSH Key
+    # 3. 생성한 공개키를 shadowlinux 엔진에 던져서 서명(Certificate) 받아오기
+    - name: Sign SSH Public Key via Vault
       uri:
-        # 주의: 아래 URL은 실제 Vault의 SSH 시크릿 엔진 경로로 맞춰주세요!
-        # 예시: v1/ssh/creds/내_역할이름
-        url: "{{ lookup('env', 'VAULT_ADDR') }}/v1/secret/data/my_ssh_key" 
-        method: GET
+        url: "{{ lookup('env', 'VAULT_ADDR') }}/v1/ssh/sign/shadowlinux"
+        method: POST
         headers:
           X-Vault-Token: "{{ vault_login.json.auth.client_token }}"
-      register: vault_key_data
+        body_format: json
+        body:
+          public_key: "{{ temp_keypair.public_key }}"
+      register: vault_signed_cert
 
-    - name: Save private key to temp file
+    # 4. 받아온 서명(인증서)을 파일로 저장 (-cert.pub 확장자 필수)
+    - name: Save signed certificate to file
       copy:
-        # 주의: Vault에서 발급하는 JSON 구조에 따라 아래 경로가 조금 다를 수 있습니다.
-        content: "{{ vault_key_data.json.data.data.private_key }}" 
-        dest: "/tmp/dynamic_ssh_key.pem"
-        mode: '0600'
+        content: "{{ vault_signed_cert.json.data.signed_key }}"
+        dest: "/tmp/dynamic_ssh_key-cert.pub"
+        mode: '0644'
 
-    - name: Apply temporary SSH key
+    # 5. 접속할 타겟 서버들에 "이 Private Key와 서명된 Cert를 같이 써라" 라고 지시
+    - name: Apply SSH Key and Certificate to target hosts
       set_fact:
-        ansible_ssh_private_key_file: "/tmp/dynamic_ssh_key.pem"
+        ansible_ssh_private_key_file: "/tmp/dynamic_ssh_key"
+        ansible_ssh_common_args: "-o CertificateFile=/tmp/dynamic_ssh_key-cert.pub -o StrictHostKeyChecking=no"
       delegate_to: "{{ item }}"
       delegate_facts: true
       loop: "{{ groups['all'] }}"
@@ -45,7 +57,7 @@
 # ==========================================
 - name: Setup Nginx Web Server
   hosts: all
-  become: true  # 관리자 권한
+  become: true
   gather_facts: true
   tasks:
     - name: 패키지 매니저 업데이트 및 Nginx 설치
@@ -60,12 +72,6 @@
         regexp: 'listen 80( default_server)?;'
         replace: 'listen 9999\1;'
 
-    - name: Change Nginx default port to 9999 (IPv6)
-      replace:
-        path: /etc/nginx/sites-available/default
-        regexp: 'listen \[::\]:80( default_server)?;'
-        replace: 'listen [::]:9999\1;'
-
     - name: 내가 만든 index.html 파일을 웹 서버로 복사
       copy:
         src: ./index.html
@@ -74,15 +80,20 @@
         group: www-data
         mode: '0644'
 
-    - name: Nginx 서비스 재시작 및 부팅 시 자동 실행 설정
+    - name: Nginx 서비스 재시작 및 자동 실행 설정
       service:
         name: nginx
         state: restarted
         enabled: yes
 
-    - name: Cleanup temporary key file
+    # 작업 후 임시 키와 인증서 모두 깔끔하게 폐기
+    - name: Cleanup temporary key files
       file:
-        path: "/tmp/dynamic_ssh_key.pem"
+        path: "{{ item }}"
         state: absent
       delegate_to: localhost
       run_once: true
+      loop:
+        - "/tmp/dynamic_ssh_key"
+        - "/tmp/dynamic_ssh_key.pub"
+        - "/tmp/dynamic_ssh_key-cert.pub"
