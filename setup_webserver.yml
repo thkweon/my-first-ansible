@@ -1,5 +1,5 @@
 # ==========================================
-# 1. Vault SSH CA (인증서 발급 부분은 기존과 동일)
+# 1. Vault SSH CA (1회용 인증서 발급)
 # ==========================================
 - name: Get Dynamic SSH Cert from Vault
   hosts: localhost
@@ -47,15 +47,13 @@
       loop: "{{ groups['all'] }}"
 
 # ==========================================
-# 2. 타겟 서버 설치 및 설정 (OS 판별)
+# 2. 타겟 서버 설치 및 설정 (Linux & macOS)
 # ==========================================
 - name: Setup Nginx Web Server
   hosts: all
   gather_facts: true
-  # 플레이 레벨의 become은 제거합니다. (변수 미정의 에러 방지)
-
   tasks:
-    # [Linux] Nginx 설치 (Debian/Ubuntu) - become: true를 여기에 명시
+    # [Linux] Nginx 설치
     - name: (Linux) Install Nginx using apt
       apt:
         name: nginx
@@ -64,24 +62,27 @@
       when: ansible_os_family == "Debian"
       become: true
 
-    # [macOS] Nginx 설치 (Homebrew) - 맥은 become이 필요 없음
-    - name: (macOS) Install Nginx using brew
-      community.general.homebrew:
-        name: nginx
-        state: present
+    # [macOS] Nginx 설치 (구형 OS 에러 무시를 위해 shell 사용)
+    - name: (macOS) Install Nginx via brew shell
+      shell: brew install nginx || true
       when: ansible_os_family == "Darwin"
+      register: brew_res
+      changed_when: "'Installing' in brew_res.stdout"
 
-    # [공통] OS별 경로 및 사용자 설정 변수 등록
+    # [공통] OS별 경로 변수 설정
     - name: Set OS specific variables
       set_fact:
         nginx_conf_dest: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/etc/nginx/servers/default.conf', '/etc/nginx/sites-available/default') }}"
         web_root: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/var/www', '/var/www/html') }}"
 
-    # [macOS] 설정 폴더가 없을 경우 생성
-    - name: (macOS) Ensure servers directory exists
+    # [macOS] 설정 및 웹 루트 디렉토리 보장
+    - name: (macOS) Ensure directories exist
       file:
-        path: /usr/local/etc/nginx/servers
+        path: "{{ item }}"
         state: directory
+      loop:
+        - "/usr/local/etc/nginx/servers"
+        - "/usr/local/var/www"
       when: ansible_os_family == "Darwin"
 
     # [공통] 9999 포트 설정 파일 배포
@@ -98,8 +99,8 @@
                   try_files $uri $uri/ =404;
               }
           }
-      become: "{{ ansible_os_family == 'Debian' }}" # 리눅스에서만 권한 상승
-      notify: Reload Nginx
+      become: "{{ ansible_os_family == 'Debian' }}"
+      notify: Restart Nginx
 
     # [공통] index.html 파일 복사
     - name: Copy index.html to web root
@@ -107,18 +108,28 @@
         src: ./index.html
         dest: "{{ web_root }}/index.html"
         mode: '0644'
-      become: "{{ ansible_os_family == 'Debian' }}" # 리눅스에서만 권한 상승
+      become: "{{ ansible_os_family == 'Debian' }}"
+
+    # [macOS] Nginx 직접 실행 (구형 맥 대응)
+    - name: (macOS) Start Nginx manually if not running
+      shell: |
+        if ! pgrep nginx > /dev/null; then
+          nginx -g 'daemon on;'
+        else
+          nginx -s reload
+        fi
+      when: ansible_os_family == "Darwin"
 
   handlers:
-    - name: Reload Nginx
+    - name: Restart Nginx
       service:
         name: nginx
-        state: reloaded
-      become: "{{ ansible_os_family == 'Debian' }}" # 핸들러도 권한 분기
-      ignore_errors: "{{ ansible_os_family == 'Darwin' }}"
+        state: restarted
+      become: true
+      when: ansible_os_family == "Debian"
 
 # ==========================================
-# 3. Cleanup
+# 3. 임시 파일 정리 (Localhost)
 # ==========================================
 - name: Cleanup temporary key files
   hosts: localhost
