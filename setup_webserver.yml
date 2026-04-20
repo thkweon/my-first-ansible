@@ -69,10 +69,11 @@
       register: brew_res
       changed_when: "'Installing' in brew_res.stdout"
 
-    # [공통] OS별 경로 변수 설정
+    # [공통] OS별 경로 변수 설정 수정
     - name: Set OS specific variables
       set_fact:
-        nginx_conf_dest: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/etc/nginx/servers/default.conf', '/etc/nginx/sites-available/default') }}"
+        # 리눅스 경로를 sites-available 대신 conf.d/default.conf로 변경
+        nginx_conf_dest: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/etc/nginx/servers/default.conf', '/etc/nginx/conf.d/default.conf') }}"
         web_root: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/var/www', '/var/www/html') }}"
 
     # [macOS] 디렉토리 구조 설정
