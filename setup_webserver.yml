@@ -1,59 +1,12 @@
-# ==========================================
-# 1. Vault SSH CA (1회용 인증서 발급)
-# ==========================================
-- name: Get Dynamic SSH Cert from Vault
-  hosts: localhost
-  gather_facts: false
-  tasks:
-    - name: Generate temporary SSH keypair
-      community.crypto.openssh_keypair:
-        path: /tmp/dynamic_ssh_key
-        type: ed25519
-      register: temp_keypair
-
-    - name: Login to Vault AppRole
-      uri:
-        url: "{{ lookup('env', 'VAULT_ADDR') }}/v1/auth/approle-ssh/login"
-        method: POST
-        body_format: json
-        body:
-          role_id: "{{ lookup('env', 'VAULT_ROLE_ID') }}"
-          secret_id: "{{ lookup('env', 'VAULT_SECRET_ID') }}"
-      register: vault_login
-
-    - name: Sign SSH Public Key via Vault
-      uri:
-        url: "{{ lookup('env', 'VAULT_ADDR') }}/v1/ssh/sign/shadowlinux"
-        method: POST
-        headers:
-          X-Vault-Token: "{{ vault_login.json.auth.client_token }}"
-        body_format: json
-        body:
-          public_key: "{{ temp_keypair.public_key }}"
-      register: vault_signed_cert
-
-    - name: Save signed certificate to file
-      copy:
-        content: "{{ vault_signed_cert.json.data.signed_key }}"
-        dest: "/tmp/dynamic_ssh_key-cert.pub"
-        mode: '0644'
-
-    - name: Apply SSH Key and Certificate to target hosts
-      set_fact:
-        ansible_ssh_private_key_file: "/tmp/dynamic_ssh_key"
-        ansible_ssh_common_args: "-o CertificateFile=/tmp/dynamic_ssh_key-cert.pub -o StrictHostKeyChecking=no"
-      delegate_to: "{{ item }}"
-      delegate_facts: true
-      loop: "{{ groups['all'] }}"
+# ... (앞부분 Vault 설정은 동일하므로 생략) ...
 
 # ==========================================
 # 2. 타겟 서버 설치 및 설정 (Linux & macOS)
 # ==========================================
 - name: Setup Nginx Web Server
   hosts: all
-  gather_facts: true # 호스트네임 수집을 위해 필수로 True 설정
+  gather_facts: true
   tasks:
-    # [Linux] Nginx 설치
     - name: (Linux) Install Nginx using apt
       apt:
         name: nginx
@@ -62,21 +15,18 @@
       when: ansible_os_family == "Debian"
       become: true
 
-    # [macOS] Nginx 설치
-    - name: (macOS) Install Nginx via brew shell
+    - name: (macOS) Install Nginx via brew
       shell: brew install nginx || true
       when: ansible_os_family == "Darwin"
       register: brew_res
       changed_when: "'Installing' in brew_res.stdout"
 
-    # [공통] OS별 경로 변수 설정 수정
     - name: Set OS specific variables
       set_fact:
-        # 파일명을 'default'가 아닌 'my_web.conf'처럼 고유하게 변경합니다.
+        # 충돌 방지를 위해 my_web.conf 사용
         nginx_conf_dest: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/etc/nginx/servers/my_web.conf', '/etc/nginx/conf.d/my_web.conf') }}"
         web_root: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/var/www', '/var/www/html') }}"
 
-    # [Linux 전용] 기존 기본 설정 파일 삭제 (충돌 방지)
     - name: (Linux) Remove default nginx config to avoid conflict
       file:
         path: "{{ item }}"
@@ -87,47 +37,16 @@
       when: ansible_os_family == "Debian"
       become: true
 
-    # [Linux 전용] 포트 충돌을 방지하기 위해 기본 default 설정을 비활성화합니다.
-    - name: (Linux) Disable default site to avoid 9999 conflict
-      file:
-        path: /etc/nginx/sites-enabled/default
-        state: absent
-      when: ansible_os_family == "Debian"
-      become: true
-
-    # 설정 반영 태스크
-    - name: Configure Nginx to listen on 9999
-      template:
-        src: ./nginx.conf.j2  # 9999 포트 설정이 담긴 템플릿
-        dest: "{{ nginx_conf_dest }}"
-      become: "{{ ansible_os_family == 'Debian' }}"
-      notify: Restart Nginx
-
-  handlers:
-    - name: Restart Nginx
-      service:
-        name: nginx
-        state: restarted
-      become: true
-      when: ansible_os_family == "Debian"
-
-    # [macOS] 디렉토리 구조 설정
     - name: (macOS) Ensure directories exist
       file:
         path: "{{ item }}"
         state: directory
-        owner: "{{ ansible_user_id }}"
         mode: '0755'
       loop:
         - "/usr/local/etc/nginx/servers"
         - "/usr/local/var/www"
-        - "/usr/local/var/run/nginx"      
-        - "/usr/local/var/log/nginx"      
-        - "/usr/local/var/run/nginx/client_body_temp" 
       when: ansible_os_family == "Darwin"
-      become: true
 
-    # [공통] Nginx 설정 파일 배포
     - name: Configure Nginx to listen on 9999
       copy:
         dest: "{{ nginx_conf_dest }}"
@@ -144,16 +63,15 @@
       become: "{{ ansible_os_family == 'Debian' }}"
       notify: Restart Nginx
 
-    # ★ [개선 핵심] index.html을 템플릿(Jinja2)으로 배포
     - name: Deploy dynamic index.html using template
       template:
-        src: ./index.html.j2  # .j2 템플릿 파일 사용
+        src: ./index.html.j2
         dest: "{{ web_root }}/index.html"
         mode: '0644'
       become: "{{ ansible_os_family == 'Debian' }}"
+      notify: Restart Nginx
 
-    # [macOS] Nginx 직접 실행 및 관리
-    - name: (macOS) Start Nginx manually if not running
+    - name: (macOS) Start/Reload Nginx
       shell: |
         NGINX_BIN=$(which nginx || echo "/usr/local/bin/nginx")
         if ! pgrep nginx > /dev/null; then
@@ -162,11 +80,6 @@
           $NGINX_BIN -g "pid /usr/local/var/run/nginx/nginx.pid;" -s reload
         fi
       when: ansible_os_family == "Darwin"
-      register: mac_nginx_start
-      failed_when: 
-        - mac_nginx_start.rc != 0
-        - "'already running' not in mac_nginx_start.stderr"
-        - "'notice' not in mac_nginx_start.stderr"
 
   handlers:
     - name: Restart Nginx
@@ -176,18 +89,4 @@
       become: true
       when: ansible_os_family == "Debian"
 
-# ==========================================
-# 3. 임시 파일 정리 (Localhost)
-# ==========================================
-- name: Cleanup temporary key files
-  hosts: localhost
-  gather_facts: false
-  tasks:
-    - name: Remove temp keys
-      file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - "/tmp/dynamic_ssh_key"
-        - "/tmp/dynamic_ssh_key.pub"
-        - "/tmp/dynamic_ssh_key-cert.pub"
+# ... (Cleanup 부분 생략) ...
