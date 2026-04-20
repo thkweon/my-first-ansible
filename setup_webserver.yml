@@ -51,20 +51,20 @@
 # ==========================================
 - name: Setup Nginx Web Server
   hosts: all
-  # 리눅스는 root 권한(sudo)이 필요하고, 맥(brew)은 보통 현재 사용자 권한으로 실행합니다.
-  become: "{{ (ansible_os_family == 'Debian') | ternary(true, false) }}"
   gather_facts: true
+  # 플레이 레벨의 become은 제거합니다. (변수 미정의 에러 방지)
+
   tasks:
-    
-    # [Linux] Nginx 설치 (Debian/Ubuntu)
+    # [Linux] Nginx 설치 (Debian/Ubuntu) - become: true를 여기에 명시
     - name: (Linux) Install Nginx using apt
       apt:
         name: nginx
         state: present
         update_cache: yes
       when: ansible_os_family == "Debian"
+      become: true
 
-    # [macOS] Nginx 설치 (Homebrew)
+    # [macOS] Nginx 설치 (Homebrew) - 맥은 become이 필요 없음
     - name: (macOS) Install Nginx using brew
       community.general.homebrew:
         name: nginx
@@ -77,7 +77,7 @@
         nginx_conf_dest: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/etc/nginx/servers/default.conf', '/etc/nginx/sites-available/default') }}"
         web_root: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/var/www', '/var/www/html') }}"
 
-    # [macOS] 설정 폴더가 없을 경우 생성 (brew 전용)
+    # [macOS] 설정 폴더가 없을 경우 생성
     - name: (macOS) Ensure servers directory exists
       file:
         path: /usr/local/etc/nginx/servers
@@ -98,6 +98,7 @@
                   try_files $uri $uri/ =404;
               }
           }
+      become: "{{ ansible_os_family == 'Debian' }}" # 리눅스에서만 권한 상승
       notify: Reload Nginx
 
     # [공통] index.html 파일 복사
@@ -106,13 +107,14 @@
         src: ./index.html
         dest: "{{ web_root }}/index.html"
         mode: '0644'
+      become: "{{ ansible_os_family == 'Debian' }}" # 리눅스에서만 권한 상승
 
   handlers:
     - name: Reload Nginx
       service:
         name: nginx
         state: reloaded
-      # 맥에서 서비스 관리자(launchctl)가 앤서블 service 모듈과 연동되지 않을 경우를 대비
+      become: "{{ ansible_os_family == 'Debian' }}" # 핸들러도 권한 분기
       ignore_errors: "{{ ansible_os_family == 'Darwin' }}"
 
 # ==========================================
