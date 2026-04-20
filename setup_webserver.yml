@@ -111,6 +111,15 @@
       become: "{{ ansible_os_family == 'Debian' }}"
       notify: Restart Nginx
 
+    # ★리눅스 Nginx 서비스가 꺼져있다면 무조건 시작하고, 부팅 시 자동 시작되도록 보장
+    - name: (Linux) Ensure Nginx is running and enabled
+      ansible.builtin.systemd:
+        name: nginx
+        state: started
+        enabled: true
+      when: ansible_os_family == "Debian"
+      become: true
+
     # macOS Nginx 관리
     - name: (macOS) Start/Reload Nginx
       shell: |
