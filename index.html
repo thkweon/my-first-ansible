@@ -7,6 +7,12 @@
 <body style="text-align: center; margin-top: 100px;">
     <h1>🎉 축하합니다! 🎉</h1>
     <p>이 웹페이지는 Semaphore와 Ansible을 통해 자동으로 배포되었습니다.</p>
+    
+    <div style="margin: 20px; padding: 15px; border: 2px solid #4CAF50; display: inline-block; border-radius: 10px;">
+        <h3>현재 접속된 서버: <span style="color: #e91e63;">{{ ansible_hostname }}</span></h3>
+        <p>(IP 주소: {{ ansible_default_ipv4.address }})</p>
+    </div>
+
     <p>나의 첫 DevOps 파이프라인 구축 성공!</p>
 </body>
 </html>
