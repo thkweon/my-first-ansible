@@ -72,9 +72,44 @@
     # [공통] OS별 경로 변수 설정 수정
     - name: Set OS specific variables
       set_fact:
-        # 리눅스 경로를 sites-available 대신 conf.d/default.conf로 변경
-        nginx_conf_dest: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/etc/nginx/servers/default.conf', '/etc/nginx/conf.d/default.conf') }}"
+        # 파일명을 'default'가 아닌 'my_web.conf'처럼 고유하게 변경합니다.
+        nginx_conf_dest: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/etc/nginx/servers/my_web.conf', '/etc/nginx/conf.d/my_web.conf') }}"
         web_root: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/var/www', '/var/www/html') }}"
+
+    # [Linux 전용] 기존 기본 설정 파일 삭제 (충돌 방지)
+    - name: (Linux) Remove default nginx config to avoid conflict
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/nginx/sites-enabled/default
+        - /etc/nginx/sites-available/default
+      when: ansible_os_family == "Debian"
+      become: true
+
+    # [Linux 전용] 포트 충돌을 방지하기 위해 기본 default 설정을 비활성화합니다.
+    - name: (Linux) Disable default site to avoid 9999 conflict
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      when: ansible_os_family == "Debian"
+      become: true
+
+    # 설정 반영 태스크
+    - name: Configure Nginx to listen on 9999
+      template:
+        src: ./nginx.conf.j2  # 9999 포트 설정이 담긴 템플릿
+        dest: "{{ nginx_conf_dest }}"
+      become: "{{ ansible_os_family == 'Debian' }}"
+      notify: Restart Nginx
+
+  handlers:
+    - name: Restart Nginx
+      service:
+        name: nginx
+        state: restarted
+      become: true
+      when: ansible_os_family == "Debian"
 
     # [macOS] 디렉토리 구조 설정
     - name: (macOS) Ensure directories exist
