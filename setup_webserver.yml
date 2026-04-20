@@ -132,19 +132,24 @@
 
     # [공통] 9999 포트 설정 파일 배포 (생략 - 기존과 동일)
 
-    # [macOS] Nginx 직접 실행
+    # [macOS] Nginx 직접 실행 (PID 파일 경로 강제 지정)
     - name: (macOS) Start Nginx manually if not running
       shell: |
         NGINX_BIN=$(which nginx || echo "/usr/local/bin/nginx")
         
-        # 권한 문제 예방을 위해 설정 파일 테스트 후 실행
+        # -g 옵션으로 pid 경로를 우리가 권한을 준 폴더 내부로 지정
         if ! pgrep nginx > /dev/null; then
-          $NGINX_BIN -g 'daemon on;'
+          $NGINX_BIN -g "daemon on; pid /usr/local/var/run/nginx/nginx.pid;"
         else
-          $NGINX_BIN -s reload
+          $NGINX_BIN -g "pid /usr/local/var/run/nginx/nginx.pid;" -s reload
         fi
       when: ansible_os_family == "Darwin"
       register: mac_nginx_start
+      failed_when: 
+        - mac_nginx_start.rc != 0
+        - "'already running' not in mac_nginx_start.stderr"
+        - "'notice' not in mac_nginx_start.stderr"
+        
       # 에러가 나더라도 이미 실행 중이거나 사소한 로그 에러면 무시
       failed_when: 
         - mac_nginx_start.rc != 0
