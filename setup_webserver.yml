@@ -71,12 +71,26 @@
       delay: 10          # [추가] 10초 간격으로 재시도
       until: apt_res is success
 
-    - name: Change Nginx default port to 9999 (IPv4)
-      replace:
-        path: /etc/nginx/sites-available/default
-        regexp: 'listen 80( default_server)?;'
-        replace: 'listen 9999\1;'
+    # ----- 이전에 있던 replace 2개 블록 대신 아래 코드를 넣으세요 -----
+    - name: 9999 포트용 깔끔한 Nginx 기본 설정 덮어씌우기
+      copy:
+        dest: /etc/nginx/sites-available/default
+        content: |
+          server {
+              listen 9999 default_server;
+              listen [::]:9999 default_server;
 
+              root /var/www/html;
+              index index.html index.htm index.nginx-debian.html;
+
+              server_name _;
+
+              location / {
+                  try_files $uri $uri/ =404;
+              }
+          }
+        mode: '0644'
+    # -----------------------------------------------------------
     - name: 내가 만든 index.html 파일을 웹 서버로 복사
       copy:
         src: ./index.html
