@@ -106,7 +106,7 @@
               }
           }
       become: "{{ ansible_os_family == 'Debian' }}"
-      notify: Restart Nginx
+      notify: Restart Nginx  # 하단의 handlers와 이름이 정확히 일치해야 함
 
     # [공통] index.html 파일 복사
     - name: Copy index.html to web root
@@ -115,22 +115,6 @@
         dest: "{{ web_root }}/index.html"
         mode: '0644'
       become: "{{ ansible_os_family == 'Debian' }}"
-
-    # [macOS] 설정 및 웹 루트, 그리고 Nginx 가동에 필요한 임시 폴더들까지 생성
-    - name: (macOS) Ensure directories exist
-      file:
-        path: "{{ item }}"
-        state: directory
-        mode: '0755'
-      loop:
-        - "/usr/local/etc/nginx/servers"
-        - "/usr/local/var/www"
-        - "/usr/local/var/run/nginx"      # 추가: 실행 파일(PID)용
-        - "/usr/local/var/log/nginx"      # 추가: 로그용
-        - "/usr/local/var/run/nginx/client_body_temp" # 에러 났던 바로 그 폴더!
-      when: ansible_os_family == "Darwin"
-
-    # [공통] 9999 포트 설정 파일 배포 (생략 - 기존과 동일)
 
     # [macOS] Nginx 직접 실행 (PID 파일 경로 강제 지정)
     - name: (macOS) Start Nginx manually if not running
@@ -145,16 +129,20 @@
         fi
       when: ansible_os_family == "Darwin"
       register: mac_nginx_start
+      # 에러가 나더라도 이미 실행 중이거나 사소한 로그 에러면 무시 (중복 선언 제거)
       failed_when: 
         - mac_nginx_start.rc != 0
         - "'already running' not in mac_nginx_start.stderr"
         - "'notice' not in mac_nginx_start.stderr"
-        
-      # 에러가 나더라도 이미 실행 중이거나 사소한 로그 에러면 무시
-      failed_when: 
-        - mac_nginx_start.rc != 0
-        - "'already running' not in mac_nginx_start.stderr"
-        - "'notice' not in mac_nginx_start.stderr"
+
+  # 리눅스 환경에서 Nginx를 재시작하기 위한 핸들러 (누락된 부분 추가)
+  handlers:
+    - name: Restart Nginx
+      service:
+        name: nginx
+        state: restarted
+      become: true
+      when: ansible_os_family == "Debian"
 
 # ==========================================
 # 3. 임시 파일 정리 (Localhost)
