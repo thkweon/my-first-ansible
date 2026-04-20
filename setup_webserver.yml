@@ -1,0 +1,49 @@
+# ==========================================
+# 2. 타겟 서버에 Nginx 웹 서버 설치 및 배포 (9999 포트)
+# ==========================================
+- name: Setup Nginx Web Server
+  hosts: all
+  become: true  # 관리자 권한
+  gather_facts: true
+  tasks:
+    - name: 패키지 매니저 업데이트 및 Nginx 설치
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+
+    # [추가] Nginx 기본 포트를 80에서 9999로 변경 (IPv4)
+    - name: Change Nginx default port to 9999 (IPv4)
+      replace:
+        path: /etc/nginx/sites-available/default
+        regexp: 'listen 80( default_server)?;'
+        replace: 'listen 9999\1;'
+
+    # [추가] Nginx 기본 포트를 80에서 9999로 변경 (IPv6)
+    - name: Change Nginx default port to 9999 (IPv6)
+      replace:
+        path: /etc/nginx/sites-available/default
+        regexp: 'listen \[::\]:80( default_server)?;'
+        replace: 'listen [::]:9999\1;'
+
+    - name: 내가 만든 index.html 파일을 웹 서버로 복사
+      copy:
+        src: ./index.html
+        dest: /var/www/html/index.html
+        owner: www-data
+        group: www-data
+        mode: '0644'
+
+    # [수정] 설정 파일이 바뀌었으므로 'restarted'로 적용
+    - name: Nginx 서비스 재시작 및 부팅 시 자동 실행 설정
+      service:
+        name: nginx
+        state: restarted
+        enabled: yes
+
+    - name: Cleanup temporary key file
+      file:
+        path: "/tmp/dynamic_ssh_key.pem"
+        state: absent
+      delegate_to: localhost
+      run_once: true
