@@ -75,15 +75,21 @@
         nginx_conf_dest: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/etc/nginx/servers/default.conf', '/etc/nginx/sites-available/default') }}"
         web_root: "{{ (ansible_os_family == 'Darwin') | ternary('/usr/local/var/www', '/var/www/html') }}"
 
-    # [macOS] 설정 및 웹 루트 디렉토리 보장
+    # [macOS] 설정 및 웹 루트, 임시 폴더 생성 (관리자 권한으로 생성 후 소유자 변경)
     - name: (macOS) Ensure directories exist
       file:
         path: "{{ item }}"
         state: directory
+        owner: "{{ ansible_user_id }}"  # Nginx가 파일 쓰기를 할 수 있도록 소유자를 thkweon으로 설정
+        mode: '0755'
       loop:
         - "/usr/local/etc/nginx/servers"
         - "/usr/local/var/www"
+        - "/usr/local/var/run/nginx"      
+        - "/usr/local/var/log/nginx"      
+        - "/usr/local/var/run/nginx/client_body_temp" 
       when: ansible_os_family == "Darwin"
+      become: true  # 이 폴더들을 만들 때만 임시로 sudo 권한 사용
 
     # [공통] 9999 포트 설정 파일 배포
     - name: Configure Nginx to listen on 9999
@@ -144,7 +150,7 @@
         - mac_nginx_start.rc != 0
         - "'already running' not in mac_nginx_start.stderr"
         - "'notice' not in mac_nginx_start.stderr"
-        
+
 # ==========================================
 # 3. 임시 파일 정리 (Localhost)
 # ==========================================
